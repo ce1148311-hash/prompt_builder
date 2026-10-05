@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PromptForge</title>
+<style>
+:root{--bg:#0f1115;--p:#181b22;--t:#e6e6e6;--m:#8a91a0;--a:#7c9cff;--g:#6fcf97;--r:#eb6f6f}
+*{box-sizing:border-box}body{margin:0;font:15px system-ui,sans-serif;background:var(--bg);color:var(--t)}
+header{display:flex;justify-content:space-between;align-items:center;padding:12px 20px;border-bottom:1px solid #2a2e38}
+main{display:grid;grid-template-columns:340px 1fr;gap:16px;padding:16px;max-width:1200px;margin:auto}
+@media(max-width:800px){main{grid-template-columns:1fr}}
+.card{background:var(--p);border-radius:10px;padding:14px}
+label{display:block;margin:10px 0 4px;color:var(--m);font-size:13px}
+textarea,select,input{width:100%;background:#0f1115;color:var(--t);border:1px solid #2a2e38;border-radius:6px;padding:8px;font:inherit}
+textarea{min-height:120px;resize:vertical}
+button{background:var(--a);color:#0b0d12;border:0;border-radius:6px;padding:8px 12px;font:inherit;font-weight:600;cursor:pointer;margin:6px 6px 0 0}
+button.s{background:#2a2e38;color:var(--t)}
+.chips label{display:inline-block;margin:3px 6px 3px 0;color:var(--t)}.chips input{width:auto}
+.tabs button{background:#2a2e38;color:var(--t)}.tabs button.on{background:var(--a);color:#0b0d12}
+pre{white-space:pre-wrap;word-break:break-word;margin:0;font:13px/1.5 ui-monospace,monospace}
+.tg{color:var(--a)}.add{color:var(--g)}.del{color:var(--r)}
+.pane{display:none;margin-top:12px}.pane.on{display:block}
+.row{padding:8px;border-bottom:1px solid #2a2e38;cursor:pointer}
+.bar{height:8px;background:#2a2e38;border-radius:4px;overflow:hidden}.bar i{display:block;height:100%;background:var(--g)}
+</style></head><body>
+<header><b>PromptForge</b><span><span id="src" style="color:var(--m);margin-right:10px"></span><button class="s" onclick="cfg()">Settings</button></span></header>
+<main>
+<section class="card">
+  <label>Template</label><select id="tpl"><option value="">— none —</option></select>
+  <label>Describe your task in plain language</label><textarea id="task"></textarea>
+  <label>Target platform</label><select id="plat"></select>
+  <label>Enhancement mode</label><select id="mode"></select>
+  <label>Power-ups</label><div class="chips" id="pw"></div>
+  <button onclick="gen()" id="go">Generate prompt</button>
+</section>
+<section class="card">
+  <div class="tabs">
+    <button data-t="prev" class="on">Preview</button><button data-t="raw">Raw</button>
+    <button data-t="qual">Quality</button><button data-t="ver">Versions</button>
+    <button data-t="dif">Diff</button><button data-t="lib">Library</button>
+  </div>
+  <div class="pane on" id="prev"><pre id="prevo">Generate a prompt to see it here.</pre></div>
+  <div class="pane" id="raw"><pre id="rawo"></pre>
+    <button onclick="copyIt()">Copy</button><button class="s" onclick="save()">Save to library</button></div>
+  <div class="pane" id="qual"></div>
+  <div class="pane" id="ver"></div>
+  <div class="pane" id="dif"></div>
+  <div class="pane" id="lib"></div>
+</section>
+</main>
+<script>
+const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
+const PLAT=["Claude","ChatGPT","Gemini","Midjourney","Perplexity","Copilot","Llama","Stable Diffusion"];
+const MODES={Balanced:"clear and well-rounded",Structured:"strictly sectioned with explicit headings",Agentic:"multi-step autonomous execution with checkpoints",Creative:"imaginative and vivid",Technical:"precise and implementation-oriented",Research:"evidence-weighted, flags uncertainty"};
+const POWER={role:"Role assignment",cot:"Chain-of-thought",fmt:"Output format",xml:"XML structure",avoid:"Avoid list",shots:"Few-shot examples",ctx:"Context anchor",steps:"Step-by-step"};
+const TPL=[
+["Blog post outline","Write a detailed outline for a blog post about [topic] aimed at [audience]."],
+["Code review","Review the following code for bugs, security issues, and readability, then suggest fixes: [paste code]."],
+["Cold email","Write a short, personalized cold email to [role] at [company] offering [product]."],
+["Study plan","Create a 4-week study plan for learning [subject] with [hours] hours per week."],
+["Meeting summary","Summarize these meeting notes into decisions, action items, owners, and deadlines: [notes]."],
+["SQL helper","Write and explain a SQL query that [goal] given tables [schema]."],
+["Product description","Write a persuasive product description for [product] highlighting [benefits]."],
+["Debugging assistant","Help me debug this error: [error]. Context: [stack, environment]. Ask clarifying questions if needed."],
+["Image: portrait","A cinematic portrait of [subject] in [setting], moody atmosphere."],
+["Image: landscape","A sweeping landscape of [place] at [time of day], painterly style."],
+["Research brief","Produce a research brief on [topic] covering key findings, disagreements, and open questions."],
+["Lesson plan","Design a 45-minute lesson plan on [topic] for [grade level] with an activity and assessment."]];
+let cur={text:"",task:"",plat:"",mode:""};
+let lib=JSON.parse(localStorage.getItem("pf_lib")||"[]");
+const store=()=>localStorage.setItem("pf_lib",JSON.stringify(lib));
+const esc=s=>s.replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+$("#plat").innerHTML=PLAT.map(p=>`<option>${p}</option>`).join("");
+$("#mode").innerHTML=Object.keys(MODES).map(m=>`<option>${m}</option>`).join("");
+$("#pw").innerHTML=Object.entries(POWER).map(([k,v])=>`<label><input type="checkbox" value="${k}"> ${v}</label>`).join("");
+TPL.forEach((t,i)=>$("#tpl").insertAdjacentHTML("beforeend",`<option value="${i}">${t[0]}</option>`));
+$("#tpl").onchange=e=>{if(e.target.value!=="")$("#task").value=TPL[e.target.value][1]};
+$$(".tabs button").forEach(b=>b.onclick=()=>{
+  $$(".tabs button").forEach(x=>x.classList.toggle("on",x===b));
+  $$(".pane").forEach(p=>p.classList.toggle("on",p.id===b.dataset.t));
+  if(b.dataset.t==="ver")renderVer();if(b.dataset.t==="dif")renderDiff();if(b.dataset.t==="lib")renderLib();
+});
+
+function cfg(){
+  const u=prompt("Worker URL (blank = local generator only):",localStorage.getItem("pf_url")||"");
+  if(u===null)return;
+  const k=prompt("Worker key (APP_KEY):",localStorage.getItem("pf_key")||"");
+  localStorage.setItem("pf_url",u.trim());localStorage.setItem("pf_key",k||"");
+}
+
+function local(task,plat,mode,pw){
+  if(/Midjourney|Stable/.test(plat))
+    return `${task}, ${MODES[mode]} style, highly detailed, dramatic lighting, sharp focus`+
+      (pw.includes("avoid")?"\n--no blur, watermark, text, extra limbs":"")+(plat==="Midjourney"?" --ar 16:9":"");
+  const xml=pw.includes("xml")||plat==="Claude";
+  const w=(k,v)=>xml?`<${k}>\n${v}\n</${k}>`:`## ${k.toUpperCase()}\n${v}`;
+  const p=[];
+  if(pw.includes("role"))p.push(w("role","You are a senior expert in the domain of this task. Work as a careful professional."));
+  if(pw.includes("ctx"))p.push(w("context","State any assumptions you make about audience, goal, and constraints before answering."));
+  p.push(w("task",task));
+  p.push(w("style",`Approach: ${MODES[mode]}.`));
+  if(pw.includes("steps"))p.push(w("steps","Work through the task step by step, numbering each step."));
+  if(pw.includes("cot"))p.push(w("reasoning","Think through the problem before answering, then give the final answer clearly."));
+  if(pw.includes("shots"))p.push(w("examples","Example 1: [input] -> [ideal output]\nExample 2: [input] -> [ideal output]"));
+  if(pw.includes("fmt"))p.push(w("output_format","Respond in a clear structure with headings and concise bullet points."));
+  if(pw.includes("avoid"))p.push(w("avoid","Avoid filler, repetition, unsupported claims, and vague wording."));
+  return p.join("\n\n");
+}
+
+async function gen(){
+  const task=$("#task").value.trim();if(!task){alert("Describe your task first.");return}
+  const plat=$("#plat").value,mode=$("#mode").value,pw=$$("#pw input:checked").map(x=>x.value);
+  const url=localStorage.getItem("pf_url"),key=localStorage.getItem("pf_key")||"";
+  $("#go").disabled=true;$("#go").textContent="Generating…";
+  let text="",src="local generator";
+  if(url){
+    try{
+      const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json","X-Key":key},
+        body:JSON.stringify({task,platform:plat,mode,power:pw.map(k=>POWER[k])})});
+      if(!r.ok)throw new Error(r.status);
+      text=(await r.json()).prompt;src="Workers AI";
+    }catch(e){text="";src="local generator (Worker failed: "+e.message+")"}
+  }
+  if(!text)text=local(task,plat,mode,pw);
+  cur={text,task,plat,mode};
+  $("#src").textContent=src;
+  $("#go").disabled=false;$("#go").textContent="Generate prompt";
+  show();
+}
+
+function show(){
+  $("#prevo").innerHTML=esc(cur.text).replace(/(&lt;\/?[\w-]+&gt;)/g,'<span class="tg">$1</span>');
+  $("#rawo").textContent=cur.text;
+  const t=cur.text,c=[
+    ["Role / persona",/\b(you are|act as|role)\b/i.test(t),15],
+    ["Clear task (15+ words)",t.split(/\s+/).length>=15,20],
+    ["Output format specified",/\b(format|respond in|bullet|headings|table|json)\b/i.test(t),15],
+    ["Constraints / avoid list",/\b(avoid|do not|don't|must|only|--no)\b/i.test(t),15],
+    ["Structure (tags or headings)",/<\w+>|^## /m.test(t),15],
+    ["Examples or context",/\b(example|context|assum)/i.test(t),10],
+    ["Step or reasoning guidance",/\b(step|think|reason)/i.test(t),10]];
+  const s=c.reduce((a,x)=>a+(x[1]?x[2]:0),0);
+  $("#qual").innerHTML=`<h3>Score: ${s}/100</h3><div class="bar"><i style="width:${s}%"></i></div>`+
+    c.map(x=>`<div style="margin-top:6px">${x[1]?"✓":"✗"} ${x[0]} (${x[2]})</div>`).join("");
+}
+function copyIt(){navigator.clipboard.writeText(cur.text)}
+
+function save(){
+  if(!cur.text)return;
+  let it=lib.find(i=>i.task===cur.task&&i.plat===cur.plat);
+  if(!it){it={id:Date.now(),task:cur.task,plat:cur.plat,versions:[]};lib.unshift(it)}
+  if(!it.versions.length||it.versions.at(-1).text!==cur.text)it.versions.push({ts:Date.now(),text:cur.text});
+  cur.id=it.id;store();alert("Saved (v"+it.versions.length+")");
+}
+const curItem=()=>lib.find(i=>i.id===cur.id);
+function renderLib(){
+  $("#lib").innerHTML=lib.length?lib.map(i=>`<div class="row" onclick="load(${i.id})"><b>${esc(i.task.slice(0,70))}</b>
+    <div style="color:var(--m)">${i.plat} · ${i.versions.length} version(s)</div></div>`).join("")+
+    `<button class="s" onclick="if(confirm('Delete entire library?')){lib=[];store();renderLib()}">Clear all</button>`:"Saved prompts appear here.";
+}
+function load(id){
+  const it=lib.find(i=>i.id===id);if(!it)return;
+  cur={id:it.id,task:it.task,plat:it.plat,mode:"",text:it.versions.at(-1).text};
+  $("#task").value=it.task;$("#plat").value=it.plat;show();
+}
+function renderVer(){
+  const it=curItem();
+  $("#ver").innerHTML=it?it.versions.map((v,i)=>`<div class="row" onclick="cur.text=lib.find(x=>x.id==${it.id}).versions[${i}].text;show()">
+    v${i+1} · ${new Date(v.ts).toLocaleString()}</div>`).join(""):"Save a prompt, or open one from the Library.";
+}
+function diff(a,b){
+  a=a.split("\n");b=b.split("\n");const n=a.length,m=b.length,d=Array.from({length:n+1},()=>Array(m+1).fill(0));
+  for(let i=n-1;i>=0;i--)for(let j=m-1;j>=0;j--)d[i][j]=a[i]===b[j]?d[i+1][j+1]+1:Math.max(d[i+1][j],d[i][j+1]);
+  let i=0,j=0;const o=[];
+  while(i<n&&j<m){if(a[i]===b[j]){o.push([" ",a[i]]);i++;j++}else if(d[i+1][j]>=d[i][j+1])o.push(["-",a[i++]]);else o.push(["+",b[j++]])}
+  while(i<n)o.push(["-",a[i++]]);while(j<m)o.push(["+",b[j++]]);return o;
+}
+function renderDiff(){
+  const it=curItem();
+  if(!it||it.versions.length<2){$("#dif").textContent="Save at least two versions of the same prompt (regenerate, then save again).";return}
+  const [a,b]=it.versions.slice(-2);
+  $("#dif").innerHTML="<pre>"+diff(a.text,b.text).map(([k,l])=>`<div class="${k==="+"?"add":k==="-"?"del":""}">${k} ${esc(l)}</div>`).join("")+"</pre>";
+}
+</script></body></html>
