@@ -182,3 +182,4 @@ function renderDiff(){
   $("#dif").innerHTML="<pre>"+diff(a.text,b.text).map(([k,l])=>`<div class="${k==="+"?"add":k==="-"?"del":""}">${k} ${esc(l)}</div>`).join("")+"</pre>";
 }
 </script></body></html>
+
