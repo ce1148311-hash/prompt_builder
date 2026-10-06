@@ -26,7 +26,7 @@ pre{white-space:pre-wrap;word-break:break-word;margin:0;font:13px/1.5 ui-monospa
 <main>
 <section class="card">
   <label>Template</label><select id="tpl"><option value="">— none —</option></select>
-  <label>Describe your task in plain language</label><textarea id="task"></textarea>
+  <label>Describe your task in plain language</label><textarea id="task" maxlength="16000"></textarea>
   <label>Target platform</label><select id="plat"></select>
   <label>Enhancement mode</label><select id="mode"></select>
   <label>Power-ups</label><div class="chips" id="pw"></div>
@@ -82,50 +82,56 @@ $$(".tabs button").forEach(b=>b.onclick=()=>{
 });
 
 function cfg(){
-  const u=prompt("Worker URL (blank = local generator only):",localStorage.getItem("pf_url")||"");
+  const u=prompt("Cloudflare Worker URL:",localStorage.getItem("pf_url")||"");
   if(u===null)return;
-  const k=prompt("Worker key (APP_KEY):",localStorage.getItem("pf_key")||"");
-  localStorage.setItem("pf_url",u.trim());localStorage.setItem("pf_key",k||"");
-}
-
-function local(task,plat,mode,pw){
-  if(/Midjourney|Stable/.test(plat))
-    return `${task}, ${MODES[mode]} style, highly detailed, dramatic lighting, sharp focus`+
-      (pw.includes("avoid")?"\n--no blur, watermark, text, extra limbs":"")+(plat==="Midjourney"?" --ar 16:9":"");
-  const xml=pw.includes("xml")||plat==="Claude";
-  const w=(k,v)=>xml?`<${k}>\n${v}\n</${k}>`:`## ${k.toUpperCase()}\n${v}`;
-  const p=[];
-  if(pw.includes("role"))p.push(w("role","You are a senior expert in the domain of this task. Work as a careful professional."));
-  if(pw.includes("ctx"))p.push(w("context","State any assumptions you make about audience, goal, and constraints before answering."));
-  p.push(w("task",task));
-  p.push(w("style",`Approach: ${MODES[mode]}.`));
-  if(pw.includes("steps"))p.push(w("steps","Work through the task step by step, numbering each step."));
-  if(pw.includes("cot"))p.push(w("reasoning","Think through the problem before answering, then give the final answer clearly."));
-  if(pw.includes("shots"))p.push(w("examples","Example 1: [input] -> [ideal output]\nExample 2: [input] -> [ideal output]"));
-  if(pw.includes("fmt"))p.push(w("output_format","Respond in a clear structure with headings and concise bullet points."));
-  if(pw.includes("avoid"))p.push(w("avoid","Avoid filler, repetition, unsupported claims, and vague wording."));
-  return p.join("\n\n");
+  let parsed;
+  try{parsed=new URL(u.trim());if(parsed.protocol!=="https:"||parsed.username||parsed.password)throw new Error();}
+  catch{alert("Enter a valid HTTPS Worker URL.");return}
+  const k=prompt("Your Worker password (APP_KEY), not your OpenRouter API key:",localStorage.getItem("pf_key")||"");
+  if(k===null)return;
+  if(!k.trim()){alert("Enter the APP_KEY configured in Cloudflare.");return}
+  localStorage.setItem("pf_url",parsed.href);localStorage.setItem("pf_key",k.trim());
+  $("#src").textContent="Settings saved";
 }
 
 async function gen(){
-  const task=$("#task").value.trim();if(!task){alert("Describe your task first.");return}
+  const task=$("#task").value.trim();
+  if(!task){alert("Describe your task first.");return}
+  if(task.length>16000){alert("Keep the task within 16,000 characters.");return}
   const plat=$("#plat").value,mode=$("#mode").value,pw=$$("#pw input:checked").map(x=>x.value);
   const url=localStorage.getItem("pf_url"),key=localStorage.getItem("pf_key")||"";
+  if(!url||!key){alert("Open Settings and enter your Worker URL and APP_KEY first.");return}
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),150000);
   $("#go").disabled=true;$("#go").textContent="Generating…";
-  let text="",src="local generator";
-  if(url){
-    try{
-      const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json","X-Key":key},
-        body:JSON.stringify({task,platform:plat,mode,power:pw.map(k=>POWER[k])})});
-      if(!r.ok)throw new Error(r.status);
-      text=(await r.json()).prompt;src="Workers AI";
-    }catch(e){text="";src="local generator (Worker failed: "+e.message+")"}
+  $("#src").textContent="Generating with AI…";
+  try{
+    const parsed=new URL(url);
+    if(parsed.protocol!=="https:"||parsed.username||parsed.password)throw new Error("Invalid Worker URL. Update Settings.");
+    const r=await fetch(parsed.href,{method:"POST",headers:{"Content-Type":"application/json","X-Key":key},
+      body:JSON.stringify({task,platform:plat,mode,power:pw}),signal:controller.signal});
+    let data;
+    try{data=await r.json();}catch{throw new Error("Worker returned a non-JSON response (HTTP "+r.status+"). Check deployment and Cloudflare logs.");}
+    if(!r.ok||data.error){
+      const message=data.error?.message||("Worker returned HTTP "+r.status);
+      throw new Error(message+(data.request_id?" [Request: "+data.request_id+"]":""));
+    }
+    if(typeof data.prompt!=="string"||!data.prompt.trim())throw new Error("Worker returned an empty prompt.");
+    cur={text:data.prompt.trim(),task,plat,mode};
+    $("#src").textContent=(data.model||"AI")+(data.paid?" · paid failsafe":" · free");
+    show();
+  }catch(e){
+    cur={text:"",task:"",plat:"",mode:""};
+    $("#src").textContent="Generation failed";
+    $("#prevo").textContent=controller.signal.aborted?"Generation timed out. Try again later.":e.message;
+    $("#rawo").textContent="";
+    $("#qual").textContent="No new prompt was generated.";
+    $("#ver").textContent="Select a saved prompt to view its versions.";
+    $("#dif").textContent="Select a saved prompt to view its diff.";
+    const preview=$('.tabs button[data-t="prev"]');if(preview)preview.click();
+  }finally{
+    clearTimeout(timer);$("#go").disabled=false;$("#go").textContent="Generate prompt";
   }
-  if(!text)text=local(task,plat,mode,pw);
-  cur={text,task,plat,mode};
-  $("#src").textContent=src;
-  $("#go").disabled=false;$("#go").textContent="Generate prompt";
-  show();
 }
 
 function show(){
@@ -140,7 +146,7 @@ function show(){
     ["Examples or context",/\b(example|context|assum)/i.test(t),10],
     ["Step or reasoning guidance",/\b(step|think|reason)/i.test(t),10]];
   const s=c.reduce((a,x)=>a+(x[1]?x[2]:0),0);
-  $("#qual").innerHTML=`<h3>Score: ${s}/100</h3><div class="bar"><i style="width:${s}%"></i></div>`+
+  $("#qual").innerHTML=`<h3>Structure checklist: ${s}/100</h3><p>This checks visible prompt structure, not factual accuracy or model quality.</p><div class="bar"><i style="width:${s}%"></i></div>`+
     c.map(x=>`<div style="margin-top:6px">${x[1]?"✓":"✗"} ${x[0]} (${x[2]})</div>`).join("");
 }
 function copyIt(){navigator.clipboard.writeText(cur.text)}
@@ -169,7 +175,7 @@ function renderVer(){
     v${i+1} · ${new Date(v.ts).toLocaleString()}</div>`).join(""):"Save a prompt, or open one from the Library.";
 }
 function diff(a,b){
-  a=a.split("\n");b=b.split("\n");const n=a.length,m=b.length,d=Array.from({length:n+1},()=>Array(m+1).fill(0));
+  a=a.split("\n");b=b.split("\n");const n=a.length,m=b.length;if(n*m>1000000)return [[" ","These versions are too large for an inline diff. Open each version to compare them."]];const d=Array.from({length:n+1},()=>Array(m+1).fill(0));
   for(let i=n-1;i>=0;i--)for(let j=m-1;j>=0;j--)d[i][j]=a[i]===b[j]?d[i+1][j+1]+1:Math.max(d[i+1][j],d[i][j+1]);
   let i=0,j=0;const o=[];
   while(i<n&&j<m){if(a[i]===b[j]){o.push([" ",a[i]]);i++;j++}else if(d[i+1][j]>=d[i][j+1])o.push(["-",a[i++]]);else o.push(["+",b[j++]])}
