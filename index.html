@@ -21,16 +21,20 @@ pre{white-space:pre-wrap;word-break:break-word;margin:0;font:13px/1.5 ui-monospa
 .pane{display:none;margin-top:12px}.pane.on{display:block}
 .row{padding:8px;border-bottom:1px solid #2a2e38;cursor:pointer}
 .bar{height:8px;background:#2a2e38;border-radius:4px;overflow:hidden}.bar i{display:block;height:100%;background:var(--g)}
+small{display:block;color:var(--m);margin:6px 0}.check input{width:auto}button:disabled{opacity:.55;cursor:wait}.row{display:block;width:100%;text-align:left;background:transparent;color:var(--t);font-weight:400}dialog{background:var(--p);color:var(--t);border:1px solid var(--m);border-radius:10px;max-width:480px}dialog::backdrop{background:#0009}.error{color:var(--r)}.warning{color:#e3bd64}
 </style></head><body>
-<header><b>PromptForge</b><span><span id="src" style="color:var(--m);margin-right:10px"></span><button class="s" onclick="cfg()">Settings</button></span></header>
+<header><b>PromptForge</b><span><span id="src" style="color:var(--m);margin-right:10px"></span><button class="s" id="settings">Settings</button></span></header>
+<div id="notice" role="status" aria-live="polite" style="max-width:1200px;margin:10px auto;padding:0 16px"></div>
 <main>
 <section class="card">
   <label>Template</label><select id="tpl"><option value="">— none —</option></select>
   <label>Describe your task in plain language</label><textarea id="task" maxlength="16000"></textarea>
   <label>Target platform</label><select id="plat"></select>
   <label>Enhancement mode</label><select id="mode"></select>
+  <label for="format">Prompt wrapper</label><select id="format"><option value="auto">Auto — follow my idea</option><option value="xml">XML</option><option value="markdown">Markdown</option><option value="plain">Plain text</option></select><small>Controls this prompt’s packaging, not the receiving AI’s answer. Image targets use plain text.</small>
   <label>Power-ups</label><div class="chips" id="pw"></div>
-  <button onclick="gen()" id="go">Generate prompt</button>
+  <button id="go">Generate prompt</button><button id="regen" class="s">Regenerate</button>
+  <label class="check"><input type="checkbox" id="reuse"> Reuse identical results from this tab for 5 minutes</label>
 </section>
 <section class="card">
   <div class="tabs">
@@ -40,18 +44,29 @@ pre{white-space:pre-wrap;word-break:break-word;margin:0;font:13px/1.5 ui-monospa
   </div>
   <div class="pane on" id="prev"><pre id="prevo">Generate a prompt to see it here.</pre></div>
   <div class="pane" id="raw"><pre id="rawo"></pre>
-    <button onclick="copyIt()">Copy</button><button class="s" onclick="save()">Save to library</button></div>
+    <button id="copy">Copy</button><button class="s" id="save">Save to library</button></div>
   <div class="pane" id="qual"></div>
   <div class="pane" id="ver"></div>
   <div class="pane" id="dif"></div>
   <div class="pane" id="lib"></div>
 </section>
 </main>
+<dialog id="configDialog">
+<form id="configForm">
+<h3>Settings</h3><p>Enter your Worker password (APP_KEY), not your OpenRouter API key.</p>
+<label for="appKey">Worker password</label><input id="appKey" type="password" autocomplete="off" required>
+<label class="check"><input type="checkbox" id="remember"> Remember on this browser</label>
+<small>Otherwise retained for this tab’s session. Remembered passwords are accessible to scripts on this site’s origin.</small>
+<button type="submit">Save settings</button><button type="button" class="s" id="cancelSettings">Cancel</button><button type="button" class="s" id="forget">Forget password</button>
+</form></dialog>
 <script>
+'use strict';
+// REQUIRED: paste the exact deployed Worker URL here. No secret belongs here.
+const WORKER_URL = 'https://promptforge.ce1148311.workers.dev/';
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
 const PLAT=["Claude","ChatGPT","Gemini","Midjourney","Perplexity","Copilot","Llama","Stable Diffusion"];
 const MODES={Balanced:"clear and well-rounded",Structured:"strictly sectioned with explicit headings",Agentic:"multi-step autonomous execution with checkpoints",Creative:"imaginative and vivid",Technical:"precise and implementation-oriented",Research:"evidence-weighted, flags uncertainty"};
-const POWER={role:"Role assignment",cot:"Chain-of-thought",fmt:"Output format",xml:"XML structure",avoid:"Avoid list",shots:"Few-shot examples",ctx:"Context anchor",steps:"Step-by-step"};
+const POWER={role:"Role assignment",cot:"Reasoning summary",fmt:"Output format",xml:"XML structure",avoid:"Avoid list",shots:"Few-shot examples",ctx:"Context anchor",steps:"Step-by-step"};
 const TPL=[
 ["Blog post outline","Write a detailed outline for a blog post about [topic] aimed at [audience]."],
 ["Code review","Review the following code for bugs, security issues, and readability, then suggest fixes: [paste code]."],
@@ -65,127 +80,213 @@ const TPL=[
 ["Image: landscape","A sweeping landscape of [place] at [time of day], painterly style."],
 ["Research brief","Produce a research brief on [topic] covering key findings, disagreements, and open questions."],
 ["Lesson plan","Design a 45-minute lesson plan on [topic] for [grade level] with an activity and assessment."]];
-let cur={text:"",task:"",plat:"",mode:""};
-let lib=JSON.parse(localStorage.getItem("pf_lib")||"[]");
-const store=()=>localStorage.setItem("pf_lib",JSON.stringify(lib));
-const esc=s=>s.replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
-
-$("#plat").innerHTML=PLAT.map(p=>`<option>${p}</option>`).join("");
-$("#mode").innerHTML=Object.keys(MODES).map(m=>`<option>${m}</option>`).join("");
-$("#pw").innerHTML=Object.entries(POWER).map(([k,v])=>`<label><input type="checkbox" value="${k}"> ${v}</label>`).join("");
-TPL.forEach((t,i)=>$("#tpl").insertAdjacentHTML("beforeend",`<option value="${i}">${t[0]}</option>`));
-$("#tpl").onchange=e=>{if(e.target.value!=="")$("#task").value=TPL[e.target.value][1]};
-$$(".tabs button").forEach(b=>b.onclick=()=>{
-  $$(".tabs button").forEach(x=>x.classList.toggle("on",x===b));
-  $$(".pane").forEach(p=>p.classList.toggle("on",p.id===b.dataset.t));
-  if(b.dataset.t==="ver")renderVer();if(b.dataset.t==="dif")renderDiff();if(b.dataset.t==="lib")renderLib();
+const FORMATS=['auto','xml','markdown','plain'];
+const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+let cur=null, busy=false, libraryWritable=true, memoryKey='', lib=[];
+const cache=new Map();
+function notice(text,type=''){ $('#notice').textContent=text;$('#notice').className=type; }
+function storage(kind,action,key,value){
+  try{return window[kind][action](key,value)}catch{return null}
+}
+function read(kind,key){return storage(kind,'getItem',key)}
+function remove(kind,key){return storage(kind,'removeItem',key)}
+function put(kind,key,value){
+  try{window[kind].setItem(key,value);return true}catch{return false}
+}
+function workerUrl(){
+  let url;try{url=new URL(WORKER_URL)}catch{throw new Error('Set WORKER_URL in index.html before using this page.')}
+  if(url.protocol!=='https:'||url.username||url.password||url.hash||url.search||/REPLACE_WITH_/i.test(WORKER_URL))throw new Error('Set WORKER_URL to your exact HTTPS Worker URL in index.html.');
+  return url.href;
+}
+function key(){return memoryKey||read('sessionStorage','pf_key')||(read('localStorage','pf_remember')==='true'?read('localStorage','pf_key'):'')||''}
+// Migrate an old persistent password into session-only storage unless explicitly remembered.
+if(read('localStorage','pf_remember')!=='true'){
+  const old=read('localStorage','pf_key');
+  if(old){memoryKey=old;put('sessionStorage','pf_key',old);remove('localStorage','pf_key')}
+}
+function normalizeLibrary(raw){
+  if(!Array.isArray(raw))throw new Error('Invalid library');
+  return raw.map(it=>{
+    if(!it||typeof it.task!=='string'||it.task.length>16000||!PLAT.includes(it.plat)||!Array.isArray(it.versions)||!it.versions.length)throw new Error('Invalid saved entry');
+    const versions=it.versions.map(v=>{
+      if(!v||typeof v.text!=='string'||!v.text.trim()||v.text.length>60000||!Number.isFinite(v.ts))throw new Error('Invalid saved version');
+      return {ts:v.ts,text:v.text,mode:Object.hasOwn(MODES,v.mode)?v.mode:null,
+        power:Array.isArray(v.power)?v.power.filter(k=>Object.hasOwn(POWER,k)):[],
+        format:FORMATS.includes(v.format)?v.format:'auto', outputFormat:FORMATS.includes(v.outputFormat)?v.outputFormat:'auto',
+        model:typeof v.model==='string'?v.model.slice(0,200):null,paid:typeof v.paid==='boolean'?v.paid:null,
+        usage:v.usage&&typeof v.usage==='object'?v.usage:{},
+        request_id:typeof v.request_id==='string'?v.request_id.slice(0,100):null,
+        attempts:Number.isInteger(v.attempts)?v.attempts:null,duration_ms:Number.isFinite(v.duration_ms)?v.duration_ms:null};
+    });
+    return {id:typeof it.id==='string'||Number.isFinite(it.id)?String(it.id):crypto.randomUUID(),task:it.task,plat:it.plat,versions};
+  });
+}
+try{
+  const raw=read('localStorage','pf_lib');lib=normalizeLibrary(raw?JSON.parse(raw):[]);
+}catch{
+  libraryWritable=false;
+  notice('Saved library data could not be read. It has been left untouched. Generation still works; use Library to export a backup before resetting it.','warning');
+}
+function persist(next){
+  if(!libraryWritable){notice('Export and reset the unreadable library first. Existing data has not been overwritten.','error');return false}
+  if(!put('localStorage','pf_lib',JSON.stringify(next))){notice('Could not save: browser storage is blocked or full. Copy your prompt or export the library.','error');return false}
+  lib=next;return true;
+}
+$('#plat').innerHTML=PLAT.map(p=>`<option>${p}</option>`).join('');
+$('#mode').innerHTML=Object.keys(MODES).map(m=>`<option>${m}</option>`).join('');
+$('#pw').innerHTML=Object.entries(POWER).map(([k,v])=>`<label><input type="checkbox" value="${k}"> ${v}</label>`).join('');
+TPL.forEach((t,i)=>{const o=new Option(t[0],String(i));$('#tpl').add(o)});
+$('#tpl').onchange=e=>{if(e.target.value!=='')$('#task').value=TPL[Number(e.target.value)][1]};
+function tab(name){
+  $$('.tabs button').forEach(b=>b.classList.toggle('on',b.dataset.t===name));
+  $$('.pane').forEach(p=>p.classList.toggle('on',p.id===name));
+  if(name==='ver')renderVer();if(name==='dif')renderDiff();if(name==='lib')renderLib();
+}
+$$('.tabs button').forEach(b=>b.addEventListener('click',()=>tab(b.dataset.t)));
+function syncPlatform(){
+  const image=['Midjourney','Stable Diffusion'].includes($('#plat').value);
+  $('#format').disabled=image;
+  $$('#pw input').forEach(el=>{el.disabled=image&&!['avoid','ctx','shots'].includes(el.value)});
+}
+$('#plat').addEventListener('change',syncPlatform);syncPlatform();
+$('#settings').addEventListener('click',()=>{
+  $('#appKey').value=key();$('#remember').checked=read('localStorage','pf_remember')==='true';$('#configDialog').showModal();
 });
-
-function cfg(){
-  const u=prompt("Cloudflare Worker URL:",localStorage.getItem("pf_url")||"");
-  if(u===null)return;
-  let parsed;
-  try{parsed=new URL(u.trim());if(parsed.protocol!=="https:"||parsed.username||parsed.password)throw new Error();}
-  catch{alert("Enter a valid HTTPS Worker URL.");return}
-  const k=prompt("Your Worker password (APP_KEY), not your OpenRouter API key:",localStorage.getItem("pf_key")||"");
-  if(k===null)return;
-  if(!k.trim()){alert("Enter the APP_KEY configured in Cloudflare.");return}
-  localStorage.setItem("pf_url",parsed.href);localStorage.setItem("pf_key",k.trim());
-  $("#src").textContent="Settings saved";
+$('#cancelSettings').addEventListener('click',()=>$('#configDialog').close());
+$('#forget').addEventListener('click',()=>{
+  memoryKey='';remove('sessionStorage','pf_key');remove('localStorage','pf_key');remove('localStorage','pf_remember');cache.clear();$('#appKey').value='';$('#configDialog').close();notice('Password forgotten.');
+});
+$('#configForm').addEventListener('submit',e=>{
+  e.preventDefault();const value=$('#appKey').value.trim();if(!value)return;
+  memoryKey=value;cache.clear();remove('localStorage','pf_key');remove('localStorage','pf_remember');remove('sessionStorage','pf_key');
+  let stored;
+  if($('#remember').checked){
+    stored=put('localStorage','pf_key',value)&&put('localStorage','pf_remember','true');
+    if(!stored){remove('localStorage','pf_key');remove('localStorage','pf_remember')}
+  }else stored=put('sessionStorage','pf_key',value);
+  $('#appKey').value='';$('#configDialog').close();notice(stored?'Settings saved.':'Password available in memory for this page only; browser storage is unavailable.','');
+});
+function inputNow(){
+  const platform=$('#plat').value,image=['Midjourney','Stable Diffusion'].includes(platform);
+  return {task:$('#task').value.trim(),platform,mode:$('#mode').value,
+    format:image?'plain':$('#format').value,power:$$('#pw input:checked').filter(e=>!e.disabled).map(e=>e.value).sort()};
 }
-
-async function gen(){
-  const task=$("#task").value.trim();
-  if(!task){alert("Describe your task first.");return}
-  if(task.length>16000){alert("Keep the task within 16,000 characters.");return}
-  const plat=$("#plat").value,mode=$("#mode").value,pw=$$("#pw input:checked").map(x=>x.value);
-  const url=localStorage.getItem("pf_url"),key=localStorage.getItem("pf_key")||"";
-  if(!url||!key){alert("Open Settings and enter your Worker URL and APP_KEY first.");return}
-  const controller=new AbortController();
-  const timer=setTimeout(()=>controller.abort(),150000);
-  $("#go").disabled=true;$("#go").textContent="Generating…";
-  $("#src").textContent="Generating with AI…";
-  try{
-    const parsed=new URL(url);
-    if(parsed.protocol!=="https:"||parsed.username||parsed.password)throw new Error("Invalid Worker URL. Update Settings.");
-    const r=await fetch(parsed.href,{method:"POST",headers:{"Content-Type":"application/json","X-Key":key},
-      body:JSON.stringify({task,platform:plat,mode,power:pw}),signal:controller.signal});
-    let data;
-    try{data=await r.json();}catch{throw new Error("Worker returned a non-JSON response (HTTP "+r.status+"). Check deployment and Cloudflare logs.");}
-    if(!r.ok||data.error){
-      const message=data.error?.message||("Worker returned HTTP "+r.status);
-      throw new Error(message+(data.request_id?" [Request: "+data.request_id+"]":""));
-    }
-    if(typeof data.prompt!=="string"||!data.prompt.trim())throw new Error("Worker returned an empty prompt.");
-    cur={text:data.prompt.trim(),task,plat,mode};
-    $("#src").textContent=(data.model||"AI")+(data.paid?" · paid failsafe":" · free");
-    show();
-  }catch(e){
-    cur={text:"",task:"",plat:"",mode:""};
-    $("#src").textContent="Generation failed";
-    $("#prevo").textContent=controller.signal.aborted?"Generation timed out. Try again later.":e.message;
-    $("#rawo").textContent="";
-    $("#qual").textContent="No new prompt was generated.";
-    $("#ver").textContent="Select a saved prompt to view its versions.";
-    $("#dif").textContent="Select a saved prompt to view its diff.";
-    const preview=$('.tabs button[data-t="prev"]');if(preview)preview.click();
-  }finally{
-    clearTimeout(timer);$("#go").disabled=false;$("#go").textContent="Generate prompt";
+function setBusy(value){busy=value;$('#go').disabled=value;$('#regen').disabled=value;$('#go').textContent=value?'Generating…':'Generate prompt'}
+function accept(data,input,cached=false){
+  if(typeof data.prompt!=='string'||!data.prompt.trim()||data.prompt.length>60000)throw new Error('Worker returned an invalid prompt.');
+  if(data.format==='xml'){
+    const doc=new DOMParser().parseFromString(data.prompt,'application/xml');
+    if(doc.querySelector('parsererror')||doc.documentElement.nodeName!=='prompt')throw new Error('Worker returned malformed prompt XML.');
   }
+  cur={text:data.prompt.trim(),task:input.task,plat:input.platform,mode:input.mode,power:[...input.power],format:input.format,
+    outputFormat:data.format||'auto',model:data.model||null,paid:typeof data.paid==='boolean'?data.paid:null,
+    usage:data.usage||{},request_id:data.request_id||null,attempts:data.attempts||null,duration_ms:data.duration_ms??null};
+  show();tab('prev');notice(cached?'Reused an identical result from this tab. Regenerate requests a new result.':'Prompt generated. Review it before use.');
 }
-
+async function gen(force=false){
+  if(busy)return;
+  const input=inputNow();if(!input.task){notice('Describe your task first.','error');return}
+  if(input.task.length>16000){notice('Keep the task within 16,000 characters.','error');return}
+  let url;try{url=workerUrl()}catch(e){notice(e.message,'error');return}
+  const password=key();if(!password){notice('Open Settings and enter your Worker password.','error');return}
+  const signature=JSON.stringify(input),saved=cache.get(signature);
+  if(!force&&$('#reuse').checked&&saved&&Date.now()-saved.ts<300000){accept(saved.data,input,true);return}
+  setBusy(true);notice('Generating with AI…');
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),150000);
+  try{
+    const r=await fetch(url,{method:'POST',redirect:'error',credentials:'omit',cache:'no-store',headers:{'Content-Type':'application/json','X-Key':password},body:JSON.stringify(input),signal:controller.signal});
+    let data;try{data=await r.json()}catch{throw new Error('Worker returned a non-JSON response (HTTP '+r.status+'). Check deployment and logs.')}
+    if(!r.ok||data.error){
+      const retry=r.headers.get('Retry-After');
+      throw new Error((data.error?.message||'Worker request failed.')+(retry?' Retry after: '+retry+'.':'')+(data.request_id?' [Request: '+data.request_id+']':''));
+    }
+    accept(data,input);
+    cache.delete(signature);cache.set(signature,{ts:Date.now(),data});while(cache.size>5)cache.delete(cache.keys().next().value);
+  }catch(e){
+    notice((controller.signal.aborted?'Generation timed out.':e.message)+(cur?' Previous successful prompt is still displayed.':''),'error');
+  }finally{clearTimeout(timer);setBusy(false)}
+}
+$('#go').addEventListener('click',()=>gen());$('#regen').addEventListener('click',()=>gen(true));
 function show(){
-  $("#prevo").innerHTML=esc(cur.text).replace(/(&lt;\/?[\w-]+&gt;)/g,'<span class="tg">$1</span>');
-  $("#rawo").textContent=cur.text;
-  const t=cur.text,c=[
-    ["Role / persona",/\b(you are|act as|role)\b/i.test(t),15],
-    ["Clear task (15+ words)",t.split(/\s+/).length>=15,20],
-    ["Output format specified",/\b(format|respond in|bullet|headings|table|json)\b/i.test(t),15],
-    ["Constraints / avoid list",/\b(avoid|do not|don't|must|only|--no)\b/i.test(t),15],
-    ["Structure (tags or headings)",/<\w+>|^## /m.test(t),15],
-    ["Examples or context",/\b(example|context|assum)/i.test(t),10],
-    ["Step or reasoning guidance",/\b(step|think|reason)/i.test(t),10]];
-  const s=c.reduce((a,x)=>a+(x[1]?x[2]:0),0);
-  $("#qual").innerHTML=`<h3>Structure checklist: ${s}/100</h3><p>This checks visible prompt structure, not factual accuracy or model quality.</p><div class="bar"><i style="width:${s}%"></i></div>`+
-    c.map(x=>`<div style="margin-top:6px">${x[1]?"✓":"✗"} ${x[0]} (${x[2]})</div>`).join("");
+  if(!cur)return;
+  $('#prevo').innerHTML=esc(cur.text).replace(/(&lt;\/?[\w.-]+\s*\/?&gt;)/g,'<span class="tg">$1</span>');
+  $('#rawo').textContent=cur.text;
+  $('#src').textContent=cur.model?cur.model+(cur.paid===true?' · paid failsafe':cur.paid===false?' · free':' · billing unknown'):'Saved version · model unknown';
+  const t=cur.text,image=['Midjourney','Stable Diffusion'].includes(cur.plat);
+  const checks=image?[
+    ['Subject / scene detail present',t.trim().split(/\s+/).length>=5],
+    ['Visual direction mentioned',/\b(light|color|style|composition|portrait|landscape|texture|photo|illustrat)/i.test(t)],
+    ['No software execution headings',!/^#{1,3}\s*(implementation|deployment|testing)/im.test(t)]
+  ]:[
+    ['Task detail present',t.trim().split(/\s+/).length>=15],
+    ['Output requirements mentioned',/\b(format|output|deliver|respond|bullet|headings|table|json)\b/i.test(t)],
+    ['Constraints mentioned',/\b(avoid|do not|don't|must|only)\b/i.test(t)],
+    ['Sections present',/<\w+>|^#{1,3} /m.test(t)]
+  ];
+  const target=$('#qual');target.replaceChildren();
+  const title=document.createElement('h3');title.textContent='Structure checklist';target.append(title);
+  const p=document.createElement('p');p.textContent='Heuristic hints only. These do not measure factual accuracy, intent preservation or model quality. Simple prompts may not need every item.';target.append(p);
+  checks.forEach(([label,pass])=>{const d=document.createElement('div');d.textContent=(pass?'✓ ':'— ')+label;target.append(d)});
+  const facts=document.createElement('p');facts.textContent='Manually compare the prompt with your idea: scope, exclusions, numbers, URLs, deliverables and missing information.';target.append(facts);
+  const details=document.createElement('details'),summary=document.createElement('summary'),pre=document.createElement('pre');summary.textContent='Generation details';
+  pre.textContent=JSON.stringify({model:cur.model,paid:cur.paid,attempts:cur.attempts,duration_ms:cur.duration_ms,usage:cur.usage,request_id:cur.request_id},null,2);details.append(summary,pre);target.append(details);
+  if($('#ver').classList.contains('on'))renderVer();if($('#dif').classList.contains('on'))renderDiff();
 }
-function copyIt(){navigator.clipboard.writeText(cur.text)}
-
-function save(){
-  if(!cur.text)return;
-  let it=lib.find(i=>i.task===cur.task&&i.plat===cur.plat);
-  if(!it){it={id:Date.now(),task:cur.task,plat:cur.plat,versions:[]};lib.unshift(it)}
-  if(!it.versions.length||it.versions.at(-1).text!==cur.text)it.versions.push({ts:Date.now(),text:cur.text});
-  cur.id=it.id;store();alert("Saved (v"+it.versions.length+")");
+$('#copy').addEventListener('click',async()=>{
+  if(!cur?.text)return;try{await navigator.clipboard.writeText(cur.text);notice('Prompt copied.')}catch{notice('Clipboard access failed. Select and copy the Raw text manually.','error')}
+});
+$('#save').addEventListener('click',()=>{
+  if(!cur?.text)return;
+  const next=structuredClone(lib);let it=next.find(i=>i.task===cur.task&&i.plat===cur.plat);
+  if(!it){it={id:crypto.randomUUID(),task:cur.task,plat:cur.plat,versions:[]};next.unshift(it)}
+  const {task,plat,id,...v}=cur;const last=it.versions.at(-1);
+  if(!last||last.text!==v.text||last.mode!==v.mode||JSON.stringify(last.power)!==JSON.stringify(v.power)||last.format!==v.format||last.model!==v.model||last.paid!==v.paid)it.versions.push({...v,ts:Date.now()});
+  if(persist(next)){cur.id=it.id;notice('Saved (v'+it.versions.length+').');if($('#lib').classList.contains('on'))renderLib();if($('#ver').classList.contains('on'))renderVer()}
+});
+const curItem=()=>cur&&lib.find(i=>i.id===cur.id);
+function action(parent,label,fn,cls='s'){
+  const b=document.createElement('button');b.type='button';b.className=cls;b.textContent=label;b.addEventListener('click',fn);parent.append(b);return b;
 }
-const curItem=()=>lib.find(i=>i.id===cur.id);
+function exportLibrary(){
+  const raw=libraryWritable?JSON.stringify(lib,null,2):(read('localStorage','pf_lib')||'[]');
+  const url=URL.createObjectURL(new Blob([raw],{type:'application/json'})),a=document.createElement('a');a.href=url;a.download='promptforge-library-backup.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
 function renderLib(){
-  $("#lib").innerHTML=lib.length?lib.map(i=>`<div class="row" onclick="load(${i.id})"><b>${esc(i.task.slice(0,70))}</b>
-    <div style="color:var(--m)">${i.plat} · ${i.versions.length} version(s)</div></div>`).join("")+
-    `<button class="s" onclick="if(confirm('Delete entire library?')){lib=[];store();renderLib()}">Clear all</button>`:"Saved prompts appear here.";
+  const parent=$('#lib');parent.replaceChildren();
+  if(!libraryWritable){const p=document.createElement('p');p.textContent='Unreadable saved data was preserved. Export a backup before resetting.';parent.append(p)}
+  if(!lib.length&&libraryWritable){const p=document.createElement('p');p.textContent='Saved prompts appear here.';parent.append(p)}
+  lib.forEach(it=>action(parent,it.task.slice(0,70)+' — '+it.plat+' · '+it.versions.length+' version(s)',()=>load(it.id),'row'));
+  action(parent,'Export backup',exportLibrary);
+  action(parent,libraryWritable?'Clear all':'Reset unreadable library',()=>{
+    if(!confirm('Delete the entire saved library? Export a backup first if needed.'))return;
+    if(!put('localStorage','pf_lib','[]')){notice('Browser storage could not be cleared.','error');return}
+    lib=[];libraryWritable=true;renderLib();notice('Saved library cleared.');
+  });
 }
-function load(id){
-  const it=lib.find(i=>i.id===id);if(!it)return;
-  cur={id:it.id,task:it.task,plat:it.plat,mode:"",text:it.versions.at(-1).text};
-  $("#task").value=it.task;$("#plat").value=it.plat;show();
+function load(id,index){
+  const it=lib.find(i=>i.id===id);if(!it)return;const v=it.versions[index??it.versions.length-1];
+  cur={...structuredClone(v),id:it.id,task:it.task,plat:it.plat};
+  $('#task').value=it.task;$('#plat').value=it.plat;$('#mode').value=v.mode||'Balanced';$('#format').value=v.format||'auto';
+  $$('#pw input').forEach(e=>e.checked=v.power.includes(e.value));syncPlatform();show();tab('prev');
+  notice(v.mode===null?'Loaded a legacy version. Its mode, power-ups and model were not recorded; choose settings before regenerating.':'Saved prompt and its settings restored.');
 }
 function renderVer(){
-  const it=curItem();
-  $("#ver").innerHTML=it?it.versions.map((v,i)=>`<div class="row" onclick="cur.text=lib.find(x=>x.id==${it.id}).versions[${i}].text;show()">
-    v${i+1} · ${new Date(v.ts).toLocaleString()}</div>`).join(""):"Save a prompt, or open one from the Library.";
+  const parent=$('#ver'),it=curItem();parent.replaceChildren();
+  if(!it){parent.textContent='Save a prompt, or open one from the Library.';return}
+  it.versions.forEach((v,i)=>action(parent,'v'+(i+1)+' · '+new Date(v.ts).toLocaleString()+' · '+(v.mode||'mode unknown')+' · '+(v.model||'model unknown'),()=>load(it.id,i),'row'));
 }
 function diff(a,b){
-  a=a.split("\n");b=b.split("\n");const n=a.length,m=b.length;if(n*m>1000000)return [[" ","These versions are too large for an inline diff. Open each version to compare them."]];const d=Array.from({length:n+1},()=>Array(m+1).fill(0));
+  a=a.split('\n');b=b.split('\n');const n=a.length,m=b.length;
+  if(n*m>1000000||n+m>10000)return [[' ','These versions are too large for an inline diff. Open each version to compare them.']];
+  const d=Array.from({length:n+1},()=>new Uint32Array(m+1));
   for(let i=n-1;i>=0;i--)for(let j=m-1;j>=0;j--)d[i][j]=a[i]===b[j]?d[i+1][j+1]+1:Math.max(d[i+1][j],d[i][j+1]);
-  let i=0,j=0;const o=[];
-  while(i<n&&j<m){if(a[i]===b[j]){o.push([" ",a[i]]);i++;j++}else if(d[i+1][j]>=d[i][j+1])o.push(["-",a[i++]]);else o.push(["+",b[j++]])}
-  while(i<n)o.push(["-",a[i++]]);while(j<m)o.push(["+",b[j++]]);return o;
+  let i=0,j=0;const o=[];while(i<n&&j<m){if(a[i]===b[j]){o.push([' ',a[i]]);i++;j++}else if(d[i+1][j]>=d[i][j+1])o.push(['-',a[i++]]);else o.push(['+',b[j++]])}
+  while(i<n)o.push(['-',a[i++]]);while(j<m)o.push(['+',b[j++]]);return o;
 }
 function renderDiff(){
-  const it=curItem();
-  if(!it||it.versions.length<2){$("#dif").textContent="Save at least two versions of the same prompt (regenerate, then save again).";return}
-  const [a,b]=it.versions.slice(-2);
-  $("#dif").innerHTML="<pre>"+diff(a.text,b.text).map(([k,l])=>`<div class="${k==="+"?"add":k==="-"?"del":""}">${k} ${esc(l)}</div>`).join("")+"</pre>";
+  const parent=$('#dif'),it=curItem();parent.replaceChildren();
+  if(!it||it.versions.length<2){parent.textContent='Save at least two versions of the same task and platform to compare the latest two.';return}
+  const [a,b]=it.versions.slice(-2),pre=document.createElement('pre');
+  diff(a.text,b.text).forEach(([k,line])=>{const d=document.createElement('div');d.className=k==='+'?'add':k==='-'?'del':'';d.textContent=k+' '+line;pre.append(d)});parent.append(pre);
 }
 </script></body></html>
-
